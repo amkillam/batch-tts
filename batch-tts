@@ -1,0 +1,126 @@
+#!/bin/bash
+
+check_args() {
+    if [ "$#" -eq 0 ]; then
+        echo "Usage: batch-tts <directory> <input_extension>"
+        exit 1
+    fi
+    
+    if [ ! -d "$1" ]; then
+        echo "First argument is not a directory. Exiting..."
+        exit 1
+    fi
+    
+    if [ ! -x "$(command -v edge-tts)" ]; then
+        echo "edge-tts is not installed or is not in the system's PATH. Exiting..."
+        exit 1
+    fi
+    
+    if [ "$1" = "--help" ]; then
+        echo "Usage: batch-tts <directory> <input_extension>"
+        exit 0
+    fi
+    
+    if [ "$1" = "-h" ]; then
+        echo "Usage: batch-tts <directory> <input_extension>"
+        exit 0
+    fi
+    
+    if [ ! -w "$1" ]; then
+        echo "Directory is not writable. Exiting..."
+        exit 1
+    fi
+    
+    if [ ! -r "$1" ]; then
+        echo "Directory is not readable. Exiting..."
+        exit 1
+    fi
+    
+    if [ ! "$(ls -A "$1")" ]; then
+        echo "Directory is empty. Exiting..."
+        exit 1
+    fi
+    
+    cd "$1" || exit 1
+    
+}
+
+make_output_dirs() {
+    mkdir -p "$1"/audio-files
+    mkdir -p "$1"/text-files
+}
+
+cleanup() {
+    tput sgr0
+    tput setaf 7
+    
+    echo "Moving input files..."
+    mv "$1""/"*."$2" "$1/"text-files
+}
+
+declare -A file_job_map=()
+
+process_files() {
+    local files=($(find "$1" -maxdepth 1 -type f -name "*.""$2" | sort -k2,2n))
+    local size
+    
+    # clear the screen then move cursor to the beginning of the screen
+    tput sc
+    
+    for (( i=0; i<${#files[@]}; i++ )); do
+        file="${files[$i]}"
+        size=$(stat --format="%s" "$file")
+        size=$((size * 400)) #Rough average of size of audio file in bytes = input text file size in bytes * 400
+        file_base_name=$(basename -- "$file")
+        file_audio="${file_base_name%.*}.mp3"
+        file_audio_output="$1""/audio-files/""$file_audio"
+        # move cursor to the next line
+        (( line_num++ ))
+        
+        local cursor_position="\033[<$line_num>;<0>f"
+        
+        tput setaf 6
+        tput bold
+        # start the edge-tts process with pv and save its PID
+        edge-tts --file "$file" --rate=+20% --voice en-ZA-LeahNeural 2>&1 \
+        | (tput rc; tput cud "$cursor_position"; pv -trbe --size $size -N "$file_audio" --interval 1 --cursor) \
+        > "$file_audio_output" &
+        
+        file_job_map["${file%.*}.mp3"]=$!
+    done
+}
+
+await_processing() {
+    declare -A completed=()
+    while (( ${#file_job_map[@]} > ${#completed[@]} )); do
+        for file in "${!file_job_map[@]}"; do
+            if ps -p "${file_job_map[$file]}" > /dev/null; then
+                sleep 1
+                
+            else
+                completed["$file"]=1
+            fi
+        done
+        sleep 1
+    done
+}
+
+input_directory="$1"
+
+input_extension=${2:-"txt"}
+
+check_args "$@"
+
+make_output_dirs "$input_directory"
+
+IFS=$'\n'
+
+process_files "$input_directory" "$input_extension"
+
+await_processing "$input_directory" "$input_extension"
+
+unset IFS
+
+cleanup"$input_directory" "$input_extension"
+
+echo "All files processed!"
