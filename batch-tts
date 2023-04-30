@@ -121,6 +121,6 @@ await_processing "$input_directory" "$input_extension"
 
 unset IFS
 
-cleanup"$input_directory" "$input_extension"
+cleanup "$input_directory" "$input_extension"
 
 echo "All files processed!"
